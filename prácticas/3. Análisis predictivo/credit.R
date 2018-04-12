@@ -173,5 +173,125 @@ print(svmModel)
 plot(svmModel)
 my_roc(val, predict(svmModel, val, type = "prob"), "Class", "Good")
 
+## -------------------------------------------------------------------------------------
+
+## Crear modelo de predicción usando RNA
+nnCtrl <- trainControl(verboseIter = F, classProbs = TRUE, method = "repeatedcv", number = 10, repeats = 1, summaryFunction = twoClassSummary)
+nnParametersGrid <- expand.grid(.decay = c(0.5, 0.1), .size = c(5, 6, 7))
+nnModel <- train(Class ~ ., data = train, method = "nnet", metric = "ROC", tuneGrid = nnParametersGrid, trControl = nnCtrl, trace = FALSE, maxit = 1000) 
+print(nnModel)
+plot(nnModel)
+my_roc(val, predict(nnModel, val, type = "prob"), "Class", "Good")
+
+## -------------------------------------------------------------------------------------
+
+## Ensembles
+library(caretEnsemble)
+
+# Conjunto de modelos
+ensembleCtrl <- trainControl(verboseIter = F, classProbs = TRUE, method = "repeatedcv", number = 10, repeats = 1, summaryFunction = twoClassSummary)
+ensemble_list <- caretList(Class ~ ., data = train, trControl = ensembleCtrl, methodList=c("rpart", "rf", "svmRadial", "nnet"))
+predictions_ensemble <- predict(ensemble_list, newdata = val)
+head(predictions_ensemble)
+print(ensemble_list)
+plot(ensemble_list$rpart)
+my_roc(val, predict(ensemble_list$rpart, val, type = "prob"), "Class", "Good")
+
+# Conjunto de modelos con parámetros de grids de parámetros
+ensemble_list <- caretList(Class~., data = train,
+  trControl = ensembleCtrl,
+  metric= "ROC",
+  tuneList=list(
+    rpart = caretModelSpec(method="rpart",     tuneGrid = expand.grid(.cp = c(0.001, 0.01, 0.1, 0.5))),
+    rf    = caretModelSpec(method="rf",        tuneGrid = expand.grid(.mtry = c(1:5))),
+    svm   = caretModelSpec(method="svmRadial", tuneLength = 10), 
+    nnet  = caretModelSpec(method="nnet",      tuneGrid = expand.grid(.decay = c(0.5, 0.1), .size = c(5, 6, 7)), trace = FALSE)
+  )
+)
+predictions_ensemble <- predict(ensemble_list, newdata = val)
+head(predictions_ensemble)
+
+rpart_roc_res <- my_roc(val, predict(ensemble_list$rpart, val, type = "prob"), "Class", "Good")
+rf_roc_res <- my_roc(val, predict(ensemble_list$rf, val, type = "prob"), "Class", "Good")
+svm_roc_res <- my_roc(val, predict(ensemble_list$svm, val, type = "prob"), "Class", "Good")
+nnet_roc_res <- my_roc(val, predict(ensemble_list$nnet, val, type = "prob"), "Class", "Good")
+
+plot.roc(rpart_roc_res$auc, ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
+plot.roc(rf_roc_res$auc, add = TRUE, col = "red", ylim=c(0,1), type = "S" , print.thres = T, main=paste('AUC:', round(auc$auc[[1]], 2)))
+lines(svm_roc_res$auc, col = "blue")
+lines(nnet_roc_res$auc, col = "green")
+
+# Generar ensemble con pesos (por defecto)
+xyplot(resamples(c(ensemble_list[1], ensemble_list[2])))
+xyplot(resamples(c(ensemble_list[2], ensemble_list[4])))
+
+ensemble_list_selected <- caretList(Class~., data = train,
+  trControl = ensembleCtrl,
+  metric= "ROC",
+  tuneList=list(
+    rf    = caretModelSpec(method="rf",   tuneGrid = expand.grid(.mtry = 5)),
+    nnet  = caretModelSpec(method="nnet", tuneGrid = expand.grid(.decay = 0.5, .size = 5), trace = FALSE)
+  )
+)
+greedy_ensemble <- caretEnsemble(
+  ensemble_list_selected , 
+  metric="ROC",
+  trControl=trainControl(
+    number=2,
+    summaryFunction=twoClassSummary,
+    classProbs=TRUE
+  ))       
+summary(greedy_ensemble)
+ensemble_pred <- data.frame(Good = predict(greedy_ensemble, val, type = "prob"), Bad = 1-predict(greedy_ensemble, val, type = "prob"))
+my_roc(val, ensemble_pred, "Class", "Good")
+
+# Generar ensemble con método seleccionado
+custom_ensemble <- caretStack(
+  ensemble_list_selected, 
+  method="gbm",
+  metric="ROC",
+  trControl=trainControl(
+    number=2,
+    summaryFunction=twoClassSummary,
+    classProbs=TRUE
+  ))  
+summary(custom_ensemble)
+ensemble_pred_2 <- data.frame(Good = predict(custom_ensemble, val, type = "prob"), Bad = 1-predict(custom_ensemble, val, type = "prob"))
+my_roc(val, ensemble_pred_2, "Class", "Good")
+
+## -------------------------------------------------------------------------------------
+
+## Boosting
+xgbCtrl <- trainControl(
+  method = "repeatedcv",
+  number = 10,
+  repeats = 1,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+xgbGrid <- expand.grid( # https://github.com/dmlc/xgboost/blob/master/doc/parameter.md 
+  nrounds = 200,
+  max_depth = c(6, 8, 10),
+  eta = c(0.001, 0.003, 0.01),
+  gamma = 1,
+  colsample_bytree = 0.5,
+  min_child_weight = 6,
+  subsample = 0.5
+)
+xgbModel <- train(
+  Class ~ ., 
+  data = train, 
+  method = "xgbTree", 
+  metric = "ROC", 
+  trControl = xgbCtrl,
+  tuneGrid = xgbGrid
+)
+print(xgbModel)
+plot(xgbModel)
+my_roc(val, predict(xgbModel, val, type = "prob"), "Class", "Good")
+
+library(xgboost)
+imp <- xgb.importance(colnames(train), xgbModel$finalModel)
+xgb.plot.importance(imp)
 
 
